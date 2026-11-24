@@ -1,0 +1,436 @@
+if not ({["3623096087"] = true})[tostring(game.PlaceId)] then
+  return
+end
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+
+local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Absolbite/Library/refs/heads/main/V8", true))():MakeWindow({
+  Name = "FTNL Hub",
+  SubTitle = "Killing Only",
+  SaveFolder = "MuscleLegendsKilling"
+})
+
+UI:AddMinimizeButton({
+  Flag = "my_btn",
+  Size = 35,
+  Transparency = 0.1,
+  Image = "",
+  Corner = {CornerRadius = UDim.new(0.5, 0)}
+})
+
+local KillingTab = UI:MakeTab({Title = "「  Killing  」"})
+local WhitelistSection = KillingTab:AddSection({Name = "Whitelist", Open = true})
+local SpectateSection = KillingTab:AddSection({Name = "Spectate", Open = false})
+local KillingSection = KillingTab:AddSection({Name = "Killing", Open = true})
+
+local Whitelisted = {}
+local SelectedTarget = ""
+local KillRadius = 75
+local SpectateConn = nil
+local SpectateTarget = nil
+
+local function GetCharacter()
+  local char = LocalPlayer.Character
+  if not char then
+    char = LocalPlayer.CharacterAdded:Wait()
+  end
+  return char
+end
+
+local function EquipAndPunch()
+  local char = LocalPlayer.Character
+  if not char then
+    return
+  end
+  local humanoid = char:FindFirstChildOfClass("Humanoid")
+  if not humanoid or humanoid.Health <= 0 then
+    return
+  end
+  local punch = LocalPlayer.Backpack:FindFirstChild("Punch") or char:FindFirstChild("Punch")
+  if punch then
+    if punch.Parent ~= char then
+      punch.Parent = char
+    end
+    local attackTime = punch:FindFirstChild("attackTime")
+    if attackTime then
+      attackTime.Value = 0
+    end
+  end
+  local muscleEvent = LocalPlayer:FindFirstChild("muscleEvent") or char:FindFirstChild("muscleEvent")
+  if muscleEvent then
+    muscleEvent:FireServer("punch", "leftHand")
+    muscleEvent:FireServer("punch", "rightHand")
+  end
+  if punch and punch.Parent == char then
+    punch:Activate()
+  end
+end
+
+local function TouchKill(targetPlayer)
+  local char = GetCharacter()
+  local tChar = targetPlayer.Character
+  local tRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
+  local leftHand = char and char:FindFirstChild("LeftHand")
+  if tRoot and leftHand then
+    firetouchinterest(tRoot, leftHand, 0)
+    firetouchinterest(tRoot, leftHand, 1)
+    EquipAndPunch()
+  end
+end
+
+local function GetWhitelistList()
+  local list = {}
+  for name in pairs(Whitelisted) do
+    local plr = Players:FindFirstChild(name)
+    if plr then
+      table.insert(list, plr.Name .. " | " .. plr.DisplayName)
+    else
+      table.insert(list, name)
+    end
+  end
+  return list
+end
+
+local WhitelistedDropdown
+
+local function RefreshWhitelistDropdown()
+  if WhitelistedDropdown then
+    WhitelistedDropdown:Set(GetWhitelistList(), false)
+  end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+  local lowerName = plr.Name:lower()
+  local lowerDisplay = plr.DisplayName:lower()
+  for name in pairs(Whitelisted) do
+    if lowerName == name:lower() or lowerDisplay == name:lower() then
+      Whitelisted[plr.Name] = true
+      RefreshWhitelistDropdown()
+    end
+  end
+  if getgenv().autoWhitelistFriends and plr:IsFriendsWith(LocalPlayer.UserId) then
+    Whitelisted[plr.Name] = true
+    RefreshWhitelistDropdown()
+  end
+end)
+
+WhitelistSection:AddTextBox({
+  Title = "Whitelist",
+  PlaceholderText = "Type username or display name...",
+  Default = "",
+  Flag = "WhitelistInput",
+  Callback = function(val)
+    if val ~= "" then
+      local q = val:lower()
+      for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Name:lower() == q or (plr.DisplayName and plr.DisplayName:lower() == q) then
+          Whitelisted[plr.Name] = true
+        end
+      end
+      RefreshWhitelistDropdown()
+    end
+  end
+})
+
+WhitelistSection:AddToggle({
+  Title = "Whitelist Friends",
+  Default = false,
+  Flag = "AutoWhitelistFriends",
+  Callback = function(state)
+    getgenv().autoWhitelistFriends = state
+    if state then
+      for _, plr in ipairs(Players:GetPlayers()) do
+        if plr:IsFriendsWith(LocalPlayer.UserId) then
+          Whitelisted[plr.Name] = true
+        end
+      end
+      RefreshWhitelistDropdown()
+    end
+  end
+})
+
+WhitelistedDropdown = WhitelistSection:AddDropdown({
+  Title = "Whitelisted Players",
+  Options = GetWhitelistList(),
+  Default = "",
+  Flag = "WhitelistedPlayersDropdown",
+  Callback = function(val)
+    local name = string.match(val, "^([^|%s]+)")
+    if name then
+      Whitelisted[name] = nil
+      RefreshWhitelistDropdown()
+    end
+  end
+})
+
+WhitelistSection:AddButton({
+  Title = "Refresh Whitelist",
+  Callback = function()
+    RefreshWhitelistDropdown()
+  end
+})
+
+WhitelistSection:AddButton({
+  Title = "Clear All Whitelisted",
+  Callback = function()
+    table.clear(Whitelisted)
+    RefreshWhitelistDropdown()
+  end
+})
+
+local function GetPlayerOptions()
+  local list = {}
+  for _, plr in ipairs(Players:GetPlayers()) do
+    if plr ~= LocalPlayer then
+      table.insert(list, plr.Name .. " | " .. plr.DisplayName)
+    end
+  end
+  return list
+end
+
+local function SetSpectate(plr)
+  if SpectateConn then
+    SpectateConn:Disconnect()
+    SpectateConn = nil
+  end
+  local function applyCam()
+    if plr and plr.Character and plr.Character:FindFirstChild("Humanoid") then
+      workspace.CurrentCamera.CameraSubject = plr.Character.Humanoid
+    end
+  end
+  applyCam()
+  if plr then
+    SpectateConn = plr.CharacterAdded:Connect(function(char)
+      char:WaitForChild("Humanoid")
+      applyCam()
+    end)
+  end
+end
+
+local SpectateDropdown
+local TargetDropdown
+
+local function RefreshPlayerLists()
+  local opts = GetPlayerOptions()
+  if SpectateDropdown then
+    SpectateDropdown:Set(opts, false)
+  end
+  if TargetDropdown then
+    TargetDropdown:Set(opts, false)
+  end
+end
+
+SpectateDropdown = SpectateSection:AddDropdown({
+  Title = "Select View",
+  Options = GetPlayerOptions(),
+  Default = "",
+  Flag = "SpectateDropdown",
+  Callback = function(val)
+    local name = string.match(val, "^([^|%s]+)")
+    if name then
+      SpectateTarget = Players:FindFirstChild(name)
+      if SpectateTarget then
+        SetSpectate(SpectateTarget)
+      end
+    end
+  end
+})
+
+SpectateSection:AddButton({
+  Title = "Refresh Player List",
+  Callback = RefreshPlayerLists
+})
+
+SpectateSection:AddButton({
+  Title = "Stop View",
+  Callback = function()
+    if SpectateConn then
+      SpectateConn:Disconnect()
+      SpectateConn = nil
+    end
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+      workspace.CurrentCamera.CameraSubject = LocalPlayer.Character.Humanoid
+    end
+  end
+})
+
+KillingSection:AddToggle({
+  Title = "Start Killing",
+  Default = false,
+  Flag = "Kill_v2_Player",
+  Callback = function(state)
+    getgenv().killallv2 = state
+    if state then
+      task.spawn(function()
+        while getgenv().killallv2 do
+          for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and not Whitelisted[plr.Name] then
+              local hum = plr.Character and plr.Character:FindFirstChild("Humanoid")
+              if hum and hum.Health > 0 then
+                TouchKill(plr)
+              end
+            end
+          end
+          RunService.Heartbeat:Wait()
+        end
+      end)
+    end
+  end
+})
+
+local initialPlayers = GetPlayerOptions()
+TargetDropdown = KillingSection:AddDropdown({
+  Title = "Select Target",
+  Options = initialPlayers,
+  Default = initialPlayers[1] or "",
+  Flag = "PlayerList",
+  Callback = function(val)
+    SelectedTarget = string.match(val, "^([^|%s]+)") or ""
+  end
+})
+
+KillingSection:AddButton({
+  Title = "Refresh Player List",
+  Callback = RefreshPlayerLists
+})
+
+KillingSection:AddToggle({
+  Title = "Kill Target Player",
+  Default = false,
+  Flag = "KillTargetToggle",
+  Callback = function(state)
+    getgenv().killTarget = state
+    if state then
+      task.spawn(function()
+        while getgenv().killTarget do
+          if SelectedTarget ~= "" then
+            for _, plr in ipairs(Players:GetPlayers()) do
+              local q = SelectedTarget:lower()
+              local match = plr.Name:lower() == q or (plr.DisplayName and plr.DisplayName:lower() == q)
+              if match and plr ~= LocalPlayer then
+                local hum = plr.Character and plr.Character:FindFirstChild("Humanoid")
+                if hum and hum.Health > 0 then
+                  TouchKill(plr)
+                end
+              end
+            end
+          end
+          RunService.Heartbeat:Wait()
+        end
+      end)
+    else
+      local char = LocalPlayer.Character
+      local hum = char and char:FindFirstChild("Humanoid")
+      if hum then
+        hum:UnequipTools()
+      end
+    end
+  end
+})
+
+KillingSection:AddTextBox({
+  Title = "Kill Aura Radius [75-350]",
+  PlaceholderText = "Enter radius...",
+  Default = "75",
+  Flag = "RadiusInput",
+  Callback = function(val)
+    KillRadius = math.clamp(tonumber(val) or 75, 1, 350)
+  end
+})
+
+local function CreateAuraEffect(root)
+  local att = Instance.new("Attachment", root)
+  local pe = Instance.new("ParticleEmitter", att)
+  pe.Texture = "rbxassetid://244905904"
+  pe.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 0)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 155, 0))
+  })
+  pe.Size = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.5),
+    NumberSequenceKeypoint.new(1, 0)
+  })
+  pe.Lifetime = NumberRange.new(0.5, 1)
+  pe.Rate = 50
+  pe.Speed = NumberRange.new(5, 10)
+  pe.SpreadAngle = Vector2.new(-180, 180)
+  local beam = Instance.new("Beam", root)
+  beam.Texture = "rbxassetid://446111271"
+  beam.TextureSpeed = 3
+  beam.Color = ColorSequence.new(Color3.fromRGB(0, 255, 0))
+  return {pe, beam}
+end
+
+KillingSection:AddToggle({
+  Title = "Kill Aura",
+  Default = false,
+  Flag = "Kill_Nearby",
+  Callback = function(state)
+    getgenv().killNearby = state
+    if not state then
+      return
+    end
+    local ring = Instance.new("Part")
+    ring.Anchored = true
+    ring.CanCollide = false
+    ring.Transparency = 0.8
+    ring.Material = Enum.Material.ForceField
+    ring.Color = Color3.fromRGB(0, 255, 0)
+    ring.Size = Vector3.new(1, 0.1, 1)
+    task.spawn(function()
+      while getgenv().killNearby do
+        pcall(function()
+          local char = LocalPlayer.Character
+          local root = char and char:FindFirstChild("HumanoidRootPart")
+          local leftHand = char and char:FindFirstChild("LeftHand")
+          if root and leftHand then
+            ring.Parent = workspace
+            ring.Size = Vector3.new(KillRadius * 2, 0.1, KillRadius * 2)
+            ring.CFrame = root.CFrame * CFrame.new(0, -2, 0)
+            local fx = CreateAuraEffect(root)
+            for _, plr in ipairs(Players:GetPlayers()) do
+              if plr ~= LocalPlayer and not Whitelisted[plr.Name] then
+                local tChar = plr.Character
+                local tRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
+                local tHum = tChar and tChar:FindFirstChild("Humanoid")
+                if tRoot and tHum and tHum.Health > 0 and (tRoot.Position - root.Position).Magnitude <= KillRadius then
+                  local pulse = Instance.new("Part")
+                  pulse.Anchored = true
+                  pulse.CanCollide = false
+                  pulse.Transparency = 0.5
+                  pulse.Material = Enum.Material.Neon
+                  pulse.Color = Color3.fromRGB(0, 255, 0)
+                  pulse.CFrame = tRoot.CFrame
+                  pulse.Size = Vector3.new(5, 5, 5)
+                  pulse.Parent = workspace
+                  TweenService:Create(pulse, TweenInfo.new(0.5), {
+                    Size = Vector3.new(0, 0, 0),
+                    Transparency = 1
+                  }):Play()
+                  Debris:AddItem(pulse, 0.5)
+                  firetouchinterest(tRoot, leftHand, 0)
+                  task.wait()
+                  firetouchinterest(tRoot, leftHand, 1)
+                  EquipAndPunch()
+                end
+              end
+            end
+            task.wait(0.1)
+            for _, item in ipairs(fx) do
+              item:Destroy()
+            end
+          end
+        end)
+        task.wait(0.1)
+      end
+      ring:Destroy()
+    end)
+  end
+})
+
+Players.PlayerAdded:Connect(RefreshPlayerLists)
+Players.PlayerRemoving:Connect(RefreshPlayerLists)
